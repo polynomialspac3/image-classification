@@ -1,198 +1,268 @@
-#
-# Copyright (c) 2023 Image Processing Research Group of University Federico II of Naples ('GRIP-UNINA').
-# All rights reserved.
-# This work should only be used for nonprofit purposes.
-#
-# By downloading and/or using any of these files, you implicitly agree to all the
-# terms of the license, as specified in the document LICENSE.txt
-# (included in this package) and online at
-# http://www.grip.unina.it/download/LICENSE_OPEN.txt
-#
-
-import torch  # >=1.6.0
-import os
-import pandas
-import numpy as np
-import tqdm
-import glob
-import sys
+import torch
+import torch.nn as nn
 from PIL import Image
 import torchvision.transforms as transforms
-import argparse
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import numpy as np
+import os
 
-from normalization import CenterCropNoPad, get_list_norm
-from normalization2 import PaddingWarp
-from get_method_here import get_method_here, def_model
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+import get_method_here
+from torchsummary import summary
+import pandas as pd
 
 
-def runnig_tests(data_path, output_dir, weights_dir, csv_file):
-    DATA_PATH = data_path
+from imgbeddings import imgbeddings
 
-    print("CURRENT OUT FOLDER")
-    print(output_dir)
-    datasets = {os.path.basename(os.path.dirname(_)): _ for _ in glob.glob(DATA_PATH+"*/")}
-    csvfilename = csv_file
-    outroot = output_dir
 
-    if not os.path.exists(outroot):
-        os.makedirs(outroot)
+def prova_embedding():
+    ibed = imgbeddings()
 
-    print(len(datasets), datasets.keys())
+    image_folders = ['coco', 'foodphoto', 'biggan_256', 'biggan_512', 'dalle_2', 'glide', 'stylegan3_t_ffhqu_256x256']
+    folder_colors = [(1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (0, 1.0, 1.0), (1.0, 1.0, 0.0),
+                     (1.0, 0.0, 1.0), (0.0, 0.0, 0.0)]
+    embeddings = []
+    labels = []
+    for folder_index, image_folder in enumerate(image_folders):
+        image_files = [os.path.join(image_folder, file) for file in os.listdir(image_folder)]
 
-    # NOTE: Substitute the device with 'cpu' if gpu acceleration is not required
+        for image_path in image_files:
+            # Controlla se il file è un'immagine .jpg o .png
+            if image_path.endswith(('.jpg', '.jpeg', '.png')):
+                # Carica l'immagine
+                image = Image.open(image_path).convert('RGB')
 
-    device = 'cuda:0'  # in ['cpu', 'cuda:0']
-    batch_size = 1
+                e = ibed.to_embeddings(image)
+                e[0][0:5]
+                embeddings.append(e.flatten())
+                # Appiattisci l'array in un vettore
+                labels.append(folder_index)
 
-    ### list of models
+    # Applica il t-SNE allo spazio di embedding
+    tsne = TSNE(n_components=2, random_state=42)
+    embedded_space_tsne = tsne.fit_transform(np.array(embeddings))
 
-    models_list = {
-        'Grag2021_progan': 'Grag2021_progan',
-        'Grag2021_latent': 'Grag2021_latent'
-    }
+    # Visualizza i risultati
+    plt.figure(figsize=(10, 8))
+    for folder_index, color in enumerate(folder_colors):
+        mask = np.array(labels) == folder_index
+        folder_name = image_folders[folder_index]
+        plt.scatter(embedded_space_tsne[mask, 0], embedded_space_tsne[mask, 1], c=[color], label=f'{folder_name}')
 
-    models_dict = dict()
-    transform_dict = dict()
-    for model_name in models_list:
+    plt.legend()
+    plt.show()
 
-        _, model_path, arch, norm_type, patch_size = get_method_here(models_list[model_name], weights_path=weights_dir)
 
-        model = def_model(arch, model_path, localize=False)
-        model = model.to(device).eval()
+def feature_map(model, image_path):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        transform = list()
-
-        if patch_size is not None:
-            if isinstance(patch_size, tuple):
-                print('input resize:', patch_size)
-                transform.append(transforms.Resize(*patch_size))
-                transform_key = 'res%d_%s' % (patch_size[0], norm_type)
-            else:
-                if patch_size > 0:
-                    print('input crop:', patch_size)
-                    transform.append(CenterCropNoPad(patch_size))
-                    transform_key = 'crop%d_%s' % (patch_size, norm_type)
-                else:
-                    print('input crop pad:', patch_size)
-                    transform.append(CenterCropNoPad(-patch_size))
-                    transform.append(PaddingWarp(-patch_size))
-                    transform_key = 'cropp%d_%s' % (-patch_size, norm_type)
-        else:
-            transform_key = 'none_%s' % norm_type
-
-        transform = transform + get_list_norm(norm_type)
-        transform = transforms.Compose(transform)
-        transform_dict[transform_key] = transform
-        models_dict[model_name] = (transform_key, model)
-
-    print(list(transform_dict.keys()))
-    print(list(models_dict.keys()))
-
-    ### test
+    image = Image.open(image_path).convert('RGB')
+    preprocess = transforms.Compose([
+        #transforms.Resize(256),
+        transforms.CenterCrop(256),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+    processed_image = preprocess(image).unsqueeze(0)
+    processed_image = processed_image.to(device)
 
     with torch.no_grad():
-        table = pandas.read_csv(csvfilename)[['src', ]]
-        for dataset in datasets:
-            outdir = os.path.join(outroot, dataset)
-            if not os.path.exists(outdir):
-                os.makedirs(outdir)
-            print(outdir)
-            output_csv = outdir + '/'+dataset+'.csv'
-            rootdataset = DATA_PATH
-            if os.path.isfile(output_csv):
-                table_old = table['src']
-                table = pandas.read_csv(output_csv)
-                assert len(table_old) == len(table['src'])
-                assert all([a == b for a, b in zip(table_old, table['src'])])
-                del table_old
-                do_models = [_ for _ in models_dict.keys() if _ not in table]
-                print('ok')
-            else:
-                do_models = list(models_dict.keys())
-            do_transforms = set([models_dict[_][0] for _ in do_models])
-            print(do_models)
-            print(do_transforms)
+        model.eval()
+        model.to(device)
+        output, y = model(processed_image)
 
-            if len(do_models) == 0:
-                continue
+    return output.squeeze().cpu().numpy(), y
 
-            batch_img = {k: list() for k in transform_dict}
-            batch_id = list()
-            table_to_save = table[table['src'].str.contains(dataset+"/")].copy()
-            print(dataset, csvfilename, flush=True)
-            print(dataset, 'Number of images:', len(table_to_save))
-            for index, dat in tqdm.tqdm(table_to_save.iterrows(), total=len(table_to_save)):
-                if dataset in dat['src'].split('/')[0]:
 
-                    filename = os.path.join(rootdataset, dat['src'])
-                    if not os.path.isfile(filename):
-                        filename = filename[:-4] + '.png'
-                    if not os.path.isfile(filename):
-                        filename = filename[:-4] + '.tif'
-
-                    for k in transform_dict:
-                        batch_img[k].append(transform_dict[k](Image.open(filename).convert('RGB')))
-                    batch_id.append(index)
-
-                    if len(batch_id) >= batch_size:
-                        for k in do_transforms:
-                            batch_img[k] = torch.stack(batch_img[k], 0)
-                        for model_name in do_models:
-                            out_tens = models_dict[model_name][1](batch_img[models_dict[model_name][0]].clone().to(device)).cpu().numpy()
-
-                            if out_tens.shape[1] == 1:
-                                out_tens = out_tens[:, 0]
-                            elif out_tens.shape[1] == 2:
-                                out_tens = out_tens[:, 1] - out_tens[:, 0]
-                            else:
-                                assert False
-                            if len(out_tens.shape) > 1:
-                                logit1 = np.mean(out_tens, (1, 2))
-                            else:
-                                logit1 = out_tens
-
-                            for ii, logit in zip(batch_id, logit1):
-                                table_to_save.loc[ii, model_name] = logit
-
-                        batch_img = {k: list() for k in transform_dict}
-                        batch_id = list()
-
-                if len(batch_id) > 0:
-                    for k in transform_dict:
-                        batch_img[k] = torch.stack(batch_img[k], 0)
-                    for model_name in models_dict:
-                        out_tens = models_dict[model_name][1](batch_img[models_dict[model_name][0]].clone().to(device)).cpu().numpy()
-
-                        if out_tens.shape[1] == 1:
-                            out_tens = out_tens[:, 0]
-                        elif out_tens.shape[1] == 2:
-                            out_tens = out_tens[:, 1] - out_tens[:, 0]
-                        else:
-                            assert False
-                        if len(out_tens.shape) > 1:
-                            logit1 = np.mean(out_tens, (1, 2))
-                        else:
-                            logit1 = out_tens
-                        for ii, logit in zip(batch_id, logit1):
-                            table_to_save.loc[ii, model_name] = logit
-                    batch_img = {k: list() for k in transform_dict}
-                    batch_id = list()
-            if "real" in dataset:
-                table_to_save.insert(1, 'label', False)
-            else:
-                table_to_save.insert(1, 'label', True)
-            table_to_save.to_csv(output_csv, index=False)  # save the results as csv file
 
 
 def main():
-    print("Running the Tests")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, help="The path to the images of the testset on which the operations have been pre applied with the provided code", default="./TestSetCSV/")
-    parser.add_argument("--out_dir", type=str, help="The Path where the csv containing the outputs of the networks should be saved", default="./results_tst")
-    parser.add_argument("--weights_dir", type=str, help="The path to the weights of the networks", default="./weights")
-    parser.add_argument("--csv_file", type=str, help="The path to the csv file", default="./TestSetCSV/operations.csv")
-    args = vars(parser.parse_args())
-    runnig_tests(args['data_dir'], args['out_dir'], args['weights_dir'], args['csv_file'])
 
 
-main()
+    weights_path = "./weights"
+    model_name = 'Grag2021_latent'
+    model_path = os.path.join(weights_path, model_name + '/model_epoch_best.pth')
+    arch = 'res50stride1'
+
+    model = get_method_here.def_model(arch, model_path, localize=False)
+
+
+    # Dizionario per tracciare i colori assegnati a ciascuna cartella
+    image_folders = ['coco', 'glide',  'biggan_512',]
+    folder_colors = ['red', 'blue', 'yellow', ]
+
+    embeddings = []
+
+    for folder_index, image_folder in enumerate(image_folders):
+        image_files = [os.path.join(image_folder, file)
+                       for file in os.listdir(image_folder)]
+
+        for image_path in image_files:
+            if image_path.endswith(('.jpg', '.jpeg', '.png')):
+                e, y = feature_map(model, image_path)
+                embeddings.append({
+                    'embedding': e.flatten(),
+                    'real': y,
+                    'label': folder_index,
+                    'folder': image_folder,
+                })
+
+
+    grafico_svm(embeddings)
+
+
+
+def grafico_tsne(embeddings):
+    image_folders = ['coco', 'glide', 'biggan_512', ]
+    folder_colors = ['red', 'blue', 'yellow', ]
+
+    df = pd.DataFrame(embeddings)
+
+    # Applica il t-SNE allo spazio di embedding
+    tsne = TSNE(n_components=2, random_state=42)
+    grafico_embedding = tsne.fit_transform(np.vstack(df['embedding']))
+
+
+
+    df['tsne-2d-one'] = grafico_embedding[:, 0]
+    df['tsne-2d-two'] = grafico_embedding[:, 1]
+
+    # Visualizza i risultati
+    plt.figure(figsize=(10, 8))
+    for folder_index, color in enumerate(folder_colors):
+        folder_name = image_folders[folder_index]
+        subset = df[df['label'] == folder_index]
+        plt.scatter(
+            subset['tsne-2d-one'],
+            subset['tsne-2d-two'],
+            c=color,
+            label=folder_name,
+        )
+
+    plt.legend()
+    plt.show()
+
+
+
+
+def grafico_svm(embeddings):
+    image_folders = ['coco', 'glide', 'biggan_512', ]
+    folder_colors = ['red', 'blue', 'yellow', ]
+
+    df = pd.DataFrame(embeddings)
+    X = np.array([item['embedding'] for item in embeddings])
+    y = np.array([item['label'] for item in embeddings])
+    colors = np.array([folder_colors[item['label']] for item in embeddings])
+
+    # Riduzione della dimensionalità
+    pca = PCA(n_components=50)  # Riduzione della dimensionalità con PCA
+    X_pca = pca.fit_transform(X)
+
+    tsne = TSNE(n_components=2, perplexity=30, n_iter=300)
+    X_tsne = tsne.fit_transform(X_pca)
+
+    # Addestramento del modello SVM
+    svm = make_pipeline(StandardScaler(), SVC(kernel='linear'))
+    svm.fit(X, y)
+
+    # Visualizzazione
+    plt.figure(figsize=(10, 10))
+    for i, color in enumerate(folder_colors):
+        plt.scatter(X_tsne[y == i, 0], X_tsne[y == i, 1], c=color, label=image_folders[i])
+
+    plt.legend()
+    plt.title('t-SNE visualization of embeddings with SVM classification')
+    plt.show()
+
+
+
+
+def massimi_minimi_tensore(embeddings):
+    #for emb in embeddings:
+    #    minimo = min(emb['embedding'])
+    #    massimo = max(emb['embedding'])
+    #    print(f"Real: {emb['real']}, Folder: {emb['folder']}, minimo: {minimo}, massimo: {massimo}")
+    folder_colors1 = ['red', 'blue', 'yellow', ]
+
+    for entry in embeddings:
+        minimo = min(entry['embedding'])
+        massimo = max(entry['embedding'])
+        cartella = entry['label']
+        if cartella == 0:
+            colore = folder_colors1[0]
+        elif cartella == 1:
+            colore = folder_colors1[1]
+        elif cartella == 2:
+            colore = folder_colors1[2]
+        plt.scatter(minimo, massimo, color=colore, label=entry['folder'])
+
+
+    # Aggiungi etichette agli assi
+    plt.xlabel('minimo')
+    plt.ylabel('massimo')
+
+    # Aggiungi una legenda
+
+    # Mostra il grafico
+    plt.show()
+
+
+
+def prova_tensor():
+    weights_path = "./weights"
+    model_name = 'Grag2021_latent'
+    model_path = os.path.join(weights_path, model_name + '/model_epoch_best.pth')
+    arch = 'res50stride1'
+
+    model = get_method_here.def_model(arch, model_path, localize=False)
+
+
+    image_path = './dalle_2/DALLE 2022-10-24 00.12.45 - A couple of cats laying next to each other.png'
+
+    image = Image.open(image_path).convert('RGB')
+    preprocess = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+    processed_image = preprocess(image).unsqueeze(0)
+    # la cnn prende in input un tensore rgb e un immagine 224 x 224
+    print("processed image" + str(processed_image))
+
+    # Estrai l'embedding utilizzando il modello
+    with torch.no_grad():
+        model.eval()
+        output = model(processed_image)
+        # il modello mi dà in output un tensore in scala di grigi e un immagine 28x28
+
+    print(output.shape)
+    print(output)
+    #visualizza_tensore_as_immagine(output)
+
+
+
+#def visualizza_tensore_as_immagine(tensore):
+    #tensore = np.ndarray((1, 28, 28, 1))  # This is your tensor
+    #print(tensore.shape)
+    #print(tensore)
+    #out = np.squeeze(tensore)
+    #plt.imshow(out)
+    #plt.show()
+
+
+
+
+
+
+
+if __name__ == "__main__":
+    main()

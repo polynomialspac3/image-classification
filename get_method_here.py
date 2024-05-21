@@ -92,7 +92,7 @@ def def_model(arch, model_path, localize=False):
     import torch
 
     if arch == 'res50':
-        from networks.networks.resnet import resnet50
+        from resnet import resnet50
         model = resnet50(num_classes=1)
     elif arch == 'resnet18':
         from torchvision.models import resnet18
@@ -100,7 +100,7 @@ def def_model(arch, model_path, localize=False):
         num_ftrs = model.fc.in_features
         model.fc = torch.nn.Linear(num_ftrs, 1)
     elif arch == 'res50stride1':
-        import networks.networks.resnet_mod as resnet_mod
+        import resnet_mod as resnet_mod
         model = resnet_mod.resnet50(num_classes=1, gap_size=1, stride0=1)
     else:
         print(arch)
