@@ -112,7 +112,26 @@ def main():
                 })
 
 
-    grafico_svm(embeddings)
+    #grafico_tsne(embeddings)
+    #decisore(embeddings)
+
+
+
+
+def decisore(embeddings):
+
+    #ci ha messo 37 minuti con cuda a fare circa 9800 immagini
+    folder_reals = defaultdict(list)
+
+    for emb in embeddings:
+        folder_reals[emb['folder']].append(emb['real'])
+
+    folder_real_means = {folder: np.mean(reals) for folder, reals in folder_reals.items()}
+
+    print("Mean 'real' values per folder:")
+    for folder, mean_real in folder_real_means.items():
+        print(f"{folder}: {mean_real}")
+
 
 
 
