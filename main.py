@@ -8,9 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-from sklearn.metrics import accuracy_score, classification_report
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 import get_method_here
@@ -161,25 +158,7 @@ def grafico_svm(embeddings):
     y = np.array([item['label'] for item in embeddings])
     colors = np.array([folder_colors[item['label']] for item in embeddings])
 
-    # Riduzione della dimensionalità
-    pca = PCA(n_components=50)  # Riduzione della dimensionalità con PCA
-    X_pca = pca.fit_transform(X)
-
-    tsne = TSNE(n_components=2, perplexity=30, n_iter=300)
-    X_tsne = tsne.fit_transform(X_pca)
-
-    # Addestramento del modello SVM
-    svm = make_pipeline(StandardScaler(), SVC(kernel='linear'))
-    svm.fit(X, y)
-
-    # Visualizzazione
-    plt.figure(figsize=(10, 10))
-    for i, color in enumerate(folder_colors):
-        plt.scatter(X_tsne[y == i, 0], X_tsne[y == i, 1], c=color, label=image_folders[i])
-
-    plt.legend()
-    plt.title('t-SNE visualization of embeddings with SVM classification')
-    plt.show()
+   
 
 
 
